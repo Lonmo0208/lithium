@@ -8,6 +8,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.shapes.EntityCollisionContext;
+import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.Nullable;
 import org.spongepowered.asm.mixin.*;
 import org.spongepowered.asm.mixin.injection.At;
@@ -38,6 +39,7 @@ public class EntityCollisionContextMixin {
      * Mixin the instanceof to always return false to avoid the expensive inventory access.
      * No need to use Opcodes.INSTANCEOF or similar.
      */
+    @Contract(pure = true)
     @ModifyConstant(
             method = "<init>(Lnet/minecraft/world/entity/Entity;ZZ)V",
             constant = @Constant(classValue = LivingEntity.class, ordinal = 0)
@@ -46,6 +48,7 @@ public class EntityCollisionContextMixin {
         return false;
     }
 
+    @Contract(pure = true)
     @ModifyConstant(
             method = "<init>(Lnet/minecraft/world/entity/Entity;ZZ)V",
             constant = @Constant(classValue = LivingEntity.class, ordinal = 2)
