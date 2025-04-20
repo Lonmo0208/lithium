@@ -11,4 +11,4 @@ includeBuild("components/mixin-config-plugin")
 
 include("common")
 include("fabric")
-//include("neoforge")
+include("neoforge")
