@@ -10,7 +10,7 @@ plugins {
 // Fabric: https://fabricmc.net/develop/
 // Neoforge: https://neoforged.net/
 val MINECRAFT_VERSION by extra { "25w14craftmine" } //MUST manually update fabric.mod.json and neoforge.mods.toml
-val NEOFORGE_VERSION by extra { "21.5.0-beta" }
+val NEOFORGE_VERSION by extra { "0.25w14craftmine.4-beta" }
 val FABRIC_LOADER_VERSION by extra { "0.16.14" }
 val FABRIC_API_VERSION by extra { "0.119.10+25w14craftmine" }
 
