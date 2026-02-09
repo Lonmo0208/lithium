@@ -12,6 +12,8 @@ import net.minecraft.world.level.chunk.MissingPaletteEntryException;
 import net.minecraft.world.level.chunk.Palette;
 import net.minecraft.world.level.chunk.PaletteResize;
 import org.jetbrains.annotations.NotNull;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.Arrays;
 import java.util.List;
@@ -25,6 +27,7 @@ import static it.unimi.dsi.fastutil.Hash.FAST_LOAD_FACTOR;
  */
 public class LithiumHashPalette<T> implements Palette<T> {
     private static final int ABSENT_VALUE = -1;
+    private static final Logger LOGGER = LogManager.getLogger(LithiumHashPalette.class);
 
     private final IdMap<T> idList;
     private final PaletteResize<T> resizeHandler;
@@ -123,16 +126,42 @@ public class LithiumHashPalette<T> implements Palette<T> {
     public @NotNull T valueFor(int id) {
         T[] entries = this.entries;
 
-        T entry = null;
-        if (id >= 0 && id < entries.length) {
-            entry = entries[id];
+        // 修复：添加边界检查，处理无效索引
+        if (id < 0 || id >= entries.length) {
+            return handleInvalidIndex(id);
         }
-
+        
+        T entry = entries[id];
         if (entry != null) {
             return entry;
         } else {
-            throw this.missingPaletteEntryCrash(id);
+            return handleInvalidIndex(id);
         }
+    }
+    
+    private T handleInvalidIndex(int invalidId) {
+        // 尝试返回一个安全的默认值而不是崩溃
+        
+        // 1. 首先尝试返回空气方块（通常ID为0）
+        T air = this.idList.byId(0);
+        if (air != null) {
+            LOGGER.warn("[Lithium] Invalid palette index {} requested. Palette size: {}, capacity: {}. Falling back to air.",
+                    invalidId, this.size, 1 << this.indexBits);
+            return air;
+        }
+        
+        // 2. 如果没有空气方块，尝试返回第一个非空条目
+        for (int i = 0; i < this.size; i++) {
+            T entry = this.entries[i];
+            if (entry != null) {
+                LOGGER.warn("[Lithium] Invalid palette index {} requested. Falling back to entry at index {}: {}",
+                        invalidId, i, entry);
+                return entry;
+            }
+        }
+        
+        // 3. 如果所有都失败，抛出详细的异常
+        throw this.missingPaletteEntryCrash(invalidId);
     }
 
     private ReportedException missingPaletteEntryCrash(int id) {
@@ -142,8 +171,34 @@ public class LithiumHashPalette<T> implements Palette<T> {
             CrashReport crashReport = CrashReport.forThrowable(e, "[Lithium] Getting Palette Entry");
             CrashReportCategory crashReportCategory = crashReport.addCategory("Chunk section");
             crashReportCategory.setDetail("IndexBits", this.indexBits);
-            crashReportCategory.setDetail("Entries", this.entries.length + " Elements: " + Arrays.toString(this.entries));
+            crashReportCategory.setDetail("Size", this.size);
+            crashReportCategory.setDetail("Capacity", 1 << this.indexBits);
+            crashReportCategory.setDetail("RequestedIndex", id);
+            
+            // 构建更详细的条目信息
+            StringBuilder entriesStr = new StringBuilder();
+            entriesStr.append(this.entries.length).append(" Elements: [");
+            for (int i = 0; i < Math.min(this.entries.length, 200); i++) { // 限制长度
+                if (i > 0) entriesStr.append(", ");
+                if (this.entries[i] == null) {
+                    entriesStr.append("null");
+                } else {
+                    entriesStr.append(this.entries[i].toString());
+                }
+            }
+            if (this.entries.length > 200) {
+                entriesStr.append(", ... (").append(this.entries.length - 200).append(" more)");
+            }
+            entriesStr.append("]");
+            crashReportCategory.setDetail("Entries", entriesStr.toString());
+            
             crashReportCategory.setDetail("Table", this.table.size() + " Elements: " + this.table);
+            
+            // 添加诊断信息
+            crashReportCategory.setDetail("Diagnosis", 
+                "Index " + id + " is out of bounds (valid range: 0-" + (this.size - 1) + "). " +
+                "This indicates corrupted chunk data or mod incompatibility.");
+            
             return new ReportedException(crashReport);
         }
     }
@@ -153,9 +208,27 @@ public class LithiumHashPalette<T> implements Palette<T> {
         this.clear();
 
         int entryCount = buf.readVarInt();
+        
+        // 修复：确保读取的条目数量不超过容量
+        int maxCapacity = 1 << this.indexBits;
+        if (entryCount > maxCapacity) {
+            LOGGER.error("[Lithium] Palette entry count {} exceeds capacity {}, truncating",
+                    entryCount, maxCapacity);
+            entryCount = maxCapacity;
+        }
 
         for (int i = 0; i < entryCount; ++i) {
-            this.addEntry(this.idList.byIdOrThrow(buf.readVarInt()));
+            int globalId = buf.readVarInt();
+            T obj = this.idList.byId(globalId);
+            if (obj != null) {
+                this.addEntry(obj);
+            } else {
+                // 记录并跳过无效的全局ID
+                LOGGER.warn("[Lithium] Skipping invalid global ID {} at position {} in palette",
+                        globalId, i);
+                // 添加一个占位符条目，保持索引一致
+                this.addEntry(null);
+            }
         }
     }
 
@@ -165,7 +238,13 @@ public class LithiumHashPalette<T> implements Palette<T> {
         buf.writeVarInt(size);
 
         for (int i = 0; i < size; ++i) {
-            buf.writeVarInt(this.idList.getId(this.valueFor(i)));
+            T value = this.valueFor(i);
+            if (value != null) {
+                buf.writeVarInt(this.idList.getId(value));
+            } else {
+                // 写入空气方块的ID作为占位符
+                buf.writeVarInt(0);
+            }
         }
     }
 
@@ -174,7 +253,12 @@ public class LithiumHashPalette<T> implements Palette<T> {
         int size = VarInt.getByteSize(this.size);
 
         for (int i = 0; i < this.size; ++i) {
-            size += VarInt.getByteSize(this.idList.getId(this.valueFor(i)));
+            T value = this.valueFor(i);
+            if (value != null) {
+                size += VarInt.getByteSize(this.idList.getId(value));
+            } else {
+                size += VarInt.getByteSize(0); // 空气方块ID
+            }
         }
 
         return size;
